@@ -32,7 +32,6 @@ import { NavigationService } from './services/navigation_service';
 import { StreetViewLinksService } from './services/street_view_links_service';
 import { DescriptionService } from './services/description_service';
 import { SpeechOutputService } from './services/speech_output_service';
-import { SpeechInputService } from './services/speech_input_service';
 import { ToastService } from './services/toast_service';
 import { SettingsDialog } from './components/settings_dialog/settings_dialog';
 import { HotkeysDialog } from './components/hotkeys_dialog/hotkeys_dialog';
@@ -71,7 +70,6 @@ export class App implements OnInit, OnDestroy {
   private streetViewLinksService = inject(StreetViewLinksService);
   private descriptionService = inject(DescriptionService);
   protected speechOutputService = inject(SpeechOutputService);
-  private speechInputService = inject(SpeechInputService);
   private hotkeyService = inject(HotkeyService); 
   private toastService = inject(ToastService);
   protected appController = inject(AppController);
@@ -86,6 +84,11 @@ export class App implements OnInit, OnDestroy {
   protected currentImage = this.stateService.currentImage;
   protected currentAddress = computed(() => this.stateService.state().address);
   protected currentHeading = computed(() => this.stateService.state().heading);
+  protected panoramaAltText = computed(() => {
+    const street = this.currentAddress() || 'unknown location';
+    const heading = this.stateService.formattedHeading();
+    return `Street view image at ${street}, facing ${heading}`;
+  });
   protected isLoading = computed(() => this.stateService.state().isLoading);
   protected adjacentNodes = computed(() => this.stateService.state().adjacentNodes);
   protected intersectionInfo = computed(() => this.streetViewLinksService.analyzeIntersection(this.currentHeading(), this.adjacentNodes()));
@@ -292,6 +295,12 @@ export class App implements OnInit, OnDestroy {
       panelClass: 'help-dialog',
       autoFocus: false
     });
+  }
+
+  protected executeMovement(
+    type: 'MOVE_FORWARD' | 'TURN_AROUND' | 'ROTATE_LEFT' | 'ROTATE_RIGHT'
+  ) {
+    this.commandService.execute({ type });
   }
 
   protected getCurtainHotkey(): string {

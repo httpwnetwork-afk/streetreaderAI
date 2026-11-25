@@ -99,6 +99,7 @@ export class SpeechInputService {
 
     this.recognition.onstart = () => {
       this.isListening.set(true);
+      void this.playBeep();
     };
 
     this.recognition.onresult = (event: SpeechRecognitionEvent) => {
@@ -123,9 +124,12 @@ export class SpeechInputService {
     const recognition = this.ensureRecognition();
     if (!recognition) return;
 
-    this.playBeep().then(() => {
+    try {
       recognition.start();
-    });
+    } catch (err) {
+      console.error('[SpeechService] Failed to start recognition:', err);
+      this.isListening.set(false);
+    }
   }
 
   stopListening() {

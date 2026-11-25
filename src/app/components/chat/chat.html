@@ -49,7 +49,7 @@
       <div matSuffix class="input-actions">
         <button mat-icon-button (click)="toggleListening()" [color]="speechInputService.listening() ? 'warn' : null" 
                 [class.recording]="speechInputService.listening()" type="button"
-                [aria-label]="speechInputService.listening() ? 'Stop voice command' : 'Start voice command'">
+                [attr.aria-label]="speechInputService.listening() ? 'Stop voice command' : 'Start voice command'">
           <mat-icon aria-hidden="true">{{ speechInputService.listening() ? 'mic' : 'mic_none' }}</mat-icon>
         </button>
         <button mat-icon-button (click)="sendMessage()" [disabled]="isAsking() || !chatControl.value" type="button"

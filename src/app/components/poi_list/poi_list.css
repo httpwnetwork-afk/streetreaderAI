@@ -25,6 +25,19 @@
   min-height: 36px !important;
   padding-top: 1px !important;
   padding-bottom: 1px !important;
+  background: none;
+  color: inherit;
+  border: none;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.compact-poi-item:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: -2px;
 }
 
 .poi-icon {

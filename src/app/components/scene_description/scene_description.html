@@ -14,11 +14,16 @@
  limitations under the License.
  -->
 
-@if (isLoading()) {
-  <mat-progress-bar mode="indeterminate" aria-label="Loading scene description"></mat-progress-bar>
+@if (isLoading() || isStreetViewLoading()) {
+  <mat-progress-bar
+    mode="indeterminate"
+    [attr.aria-label]="isStreetViewLoading() ? 'Loading street view' : 'Loading scene description'">
+  </mat-progress-bar>
 }
 <div aria-live="polite" class="description-content">
-  @if (description()) {
+  @if (isStreetViewLoading()) {
+    <p>Loading street view, please wait</p>
+  } @else if (description()) {
     <p>{{ description() }}</p>
   } @else if (!isLoading()) {
     <p>No description available.</p>

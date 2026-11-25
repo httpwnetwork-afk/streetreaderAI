@@ -50,6 +50,10 @@ export class SceneDescriptionComponent implements OnDestroy {
 
   protected description = computed(() => this.stateService.state().description);
   protected isLoading = signal<boolean>(false);
+  protected isStreetViewLoading = computed(() => {
+    const state = this.stateService.state();
+    return state.isLoading || (!state.currentImage && this.appController.activity() === 'TRAVELING');
+  });
   
   protected availableDirections = computed(() => {
     const heading = this.stateService.currentHeading();
@@ -124,6 +128,9 @@ export class SceneDescriptionComponent implements OnDestroy {
 
     // 3. If forced or auto-describing, we need an image to fetch a new one
     if (!image) {
+      if (this.isStreetViewLoading()) {
+        return;
+      }
       this.processDescription('No description available.', false);
       return;
     }

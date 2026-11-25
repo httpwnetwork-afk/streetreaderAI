@@ -233,10 +233,12 @@ export class NavigationService {
 
   private fetchNearbyPois(nodeId: string | null, lat: number, lng: number, heading: number) {
     this.poiSub?.unsubscribe();
+    this.stateService.setLoadingPois(true);
     this.poiSub = this.apiService.getNearbyPlaces({ lat, lng, heading }).subscribe({
       next: (res) => {
         const places = res?.places ?? [];
         this.stateService.setMetadata({ nearbyPOIs: places });
+        this.stateService.setLoadingPois(false);
         if (nodeId) {
           const cached = this.nodeCache.get(nodeId);
           if (cached) {
@@ -246,6 +248,7 @@ export class NavigationService {
       },
       error: () => {
         this.stateService.setMetadata({ nearbyPOIs: [] });
+        this.stateService.setLoadingPois(false);
       },
     });
   }

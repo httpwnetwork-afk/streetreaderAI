@@ -18,10 +18,12 @@ import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 
 import { SceneDescriptionComponent } from './scene_description';
+import { StateService } from '../../services/state_service';
 
 describe('SceneDescriptionComponent', () => {
   let component: SceneDescriptionComponent;
   let fixture: ComponentFixture<SceneDescriptionComponent>;
+  let stateService: StateService;
 
   beforeEach(async () => {
     await TestBed.configureTestingModule({
@@ -30,6 +32,7 @@ describe('SceneDescriptionComponent', () => {
     })
     .compileComponents();
 
+    stateService = TestBed.inject(StateService);
     fixture = TestBed.createComponent(SceneDescriptionComponent);
     component = fixture.componentInstance;
     await fixture.whenStable();
@@ -37,5 +40,16 @@ describe('SceneDescriptionComponent', () => {
 
   it('should create', () => {
     expect(component).toBeTruthy();
+  });
+
+  it('shows loading message instead of No description available while street view is loading', () => {
+    stateService.setLoading(true);
+    fixture.detectChanges();
+    expect(fixture.nativeElement.textContent).toContain('Loading street view, please wait');
+    expect(fixture.nativeElement.textContent).not.toContain('No description available');
+
+    stateService.setLoading(false);
+    fixture.detectChanges();
+    expect(fixture.nativeElement.textContent).toContain('No description available');
   });
 });

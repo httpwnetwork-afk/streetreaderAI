@@ -16,15 +16,15 @@
 
 <header>
   <mat-toolbar color="primary" class="top-bar">
-    <span style="font-size: 24px; margin-right: 12px; vertical-align: middle;">🛣️</span>
-    <span>StreetReaderAI</span>
+    <span class="app-logo-emoji" aria-hidden="true">🛣️</span>
+    <h1 class="app-title">StreetReaderAI</h1>
     <span style="flex: 1 1 auto;"></span>
     <button mat-button aria-label="Help and keyboard shortcuts" (click)="openHotkeys()">
-      <mat-icon>help</mat-icon>
+      <mat-icon aria-hidden="true">help</mat-icon>
       Help
     </button>
     <button mat-button aria-label="Settings" (click)="openSettings()">
-      <mat-icon>settings</mat-icon>
+      <mat-icon aria-hidden="true">settings</mat-icon>
       Settings
     </button>
   </mat-toolbar>
@@ -32,12 +32,10 @@
 
 <main class="viewer-container" role="main">
   <img *ngIf="currentImage()"
-       class="panorama-image" 
+       class="panorama-image"
        [src]="'data:image/jpeg;base64,' + currentImage()"
-       role="img" 
-       [attr.aria-label]="'Street view image at ' + (currentAddress() || 'unknown location')"
-       alt="Street view panorama">
-  <div class="panorama-placeholder" *ngIf="!currentImage()">Loading...</div>
+       [alt]="panoramaAltText()">
+  <div class="panorama-placeholder" *ngIf="!currentImage()">Loading street view, please wait</div>
 
   <!-- Screen Curtain -->
   <div class="screen-curtain" *ngIf="stateService.screenCurtain()" aria-hidden="true">
@@ -53,25 +51,25 @@
   <app-radar-view></app-radar-view>
 
   @if (demoModeService.enabled()) {
-    <div class="demo-movement-keys mat-elevation-z3" role="region" aria-label="Movement keyboard controls">
+    <div class="demo-movement-keys mat-elevation-z3" role="region" aria-label="Movement controls">
       <div class="demo-keys-title">Movement Keys</div>
       <div class="demo-keys-grid">
-        <div class="demo-key-item">
+        <button type="button" class="demo-key-item" aria-label="Move forward" (click)="executeMovement('MOVE_FORWARD')">
           <span class="demo-key-badge" aria-hidden="true">&uarr;</span>
           <span class="demo-key-desc">Move forward</span>
-        </div>
-        <div class="demo-key-item">
+        </button>
+        <button type="button" class="demo-key-item" aria-label="Turn around 180 degrees" (click)="executeMovement('TURN_AROUND')">
           <span class="demo-key-badge" aria-hidden="true">&darr;</span>
           <span class="demo-key-desc">Turn around 180&deg;</span>
-        </div>
-        <div class="demo-key-item">
+        </button>
+        <button type="button" class="demo-key-item" aria-label="Turn left 45 degrees" (click)="executeMovement('ROTATE_LEFT')">
           <span class="demo-key-badge" aria-hidden="true">&larr;</span>
           <span class="demo-key-desc">Turn left 45&deg;</span>
-        </div>
-        <div class="demo-key-item">
+        </button>
+        <button type="button" class="demo-key-item" aria-label="Turn right 45 degrees" (click)="executeMovement('ROTATE_RIGHT')">
           <span class="demo-key-badge" aria-hidden="true">&rarr;</span>
           <span class="demo-key-desc">Turn right 45&deg;</span>
-        </div>
+        </button>
       </div>
     </div>
   }

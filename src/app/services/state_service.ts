@@ -49,6 +49,7 @@ export interface AppState {
   // App Session State
   chatHistory: ChatMessage[];
   isLoading: boolean;
+  isLoadingPois: boolean;
   modifierKey: ModifierKey;
   orientationDisplayMode: OrientationDisplayMode;
   maxPoiItems: number;
@@ -82,6 +83,7 @@ export class StateService {
     nearbyPOIs: [],
     chatHistory: [],
     isLoading: false,
+    isLoadingPois: false,
     modifierKey: (safeStorage.getItem(this.MODIFIER_KEY) as ModifierKey) || 'alt',
     orientationDisplayMode: (safeStorage.getItem(this.ORIENTATION_MODE_KEY) as OrientationDisplayMode) || 'both',
     maxPoiItems: parseInt(safeStorage.getItem(this.MAX_POI_ITEMS_KEY) || '3', 10) || 3,
@@ -111,6 +113,10 @@ export class StateService {
   readonly formattedHeading = computed(() => {
     const heading = this.appState().heading;
     return this.formatHeadingValue(heading);
+  });
+
+  readonly cardinalHeading = computed(() => {
+    return this.getCardinalDirection(this.appState().heading);
   });
 
   setModifierKey(key: ModifierKey) {
@@ -201,6 +207,10 @@ export class StateService {
 
   setLoading(isLoading: boolean) {
     this.appState.update(s => ({ ...s, isLoading }));
+  }
+
+  setLoadingPois(isLoadingPois: boolean) {
+    this.appState.update(s => ({ ...s, isLoadingPois }));
   }
 
   getHotkeyString(key: string): string {

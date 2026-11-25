@@ -14,20 +14,27 @@
  limitations under the License.
  -->
 
-@if (pois().length > 0) {
+@if (isLoadingView()) {
+  <p class="empty-message">Loading street view, please wait</p>
+} @else if (pois().length > 0) {
   <mat-list class="compact-poi-list">
     @for (poi of pois(); track poi.name) {
-      <mat-list-item class="compact-poi-item">
-        <mat-icon matListItemIcon class="poi-icon">{{ getIcon(poi.types) }}</mat-icon>
+      <button
+        type="button"
+        mat-list-item
+        class="compact-poi-item"
+        (click)="announcePoi(poi)"
+        [attr.aria-label]="formatPoiAnnouncement(poi)">
+        <mat-icon matListItemIcon class="poi-icon" aria-hidden="true">{{ getIcon(poi.types) }}</mat-icon>
         <div matListItemTitle class="poi-title">{{ poi.name }}</div>
         <div matListItemLine class="poi-meta">
           @if (poi.vicinity) {
             <span class="poi-vicinity">{{ poi.vicinity }}</span>
-            <span class="poi-sep">&middot;</span>
+            <span class="poi-sep" aria-hidden="true">&middot;</span>
           }
           <span class="position-tag">{{ getRelativePosition(poi) }}</span>
         </div>
-      </mat-list-item>
+      </button>
     }
   </mat-list>
 } @else {

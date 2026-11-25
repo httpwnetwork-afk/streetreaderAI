@@ -30,8 +30,8 @@ interface Projected {
   standalone: true,
   imports: [CommonModule],
   template: `
-    <div class="radar-card" aria-hidden="true">
-      <svg width="100" height="100" viewBox="0 0 240 240" class="radar-svg">
+    <div class="radar-card" role="img" [attr.aria-label]="minimapLabel()">
+      <svg width="100" height="100" viewBox="0 0 240 240" class="radar-svg" aria-hidden="true" focusable="false">
         <!-- Range rings & cardinal crosshairs -->
         <circle cx="120" cy="120" r="50" fill="none" stroke="rgba(148, 163, 184, 0.14)" stroke-width="1" stroke-dasharray="2,2" />
         <circle cx="120" cy="120" r="100" fill="none" stroke="rgba(148, 163, 184, 0.14)" stroke-width="1" stroke-dasharray="2,2" />
@@ -111,7 +111,6 @@ interface Projected {
       border-radius: 8px;
       padding: 4px;
       box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
-      pointer-events: none;
       user-select: none;
     }
     .radar-svg {
@@ -127,10 +126,20 @@ export class RadarViewComponent {
   private apiService = inject(ApiService);
 
   protected currentHeading = computed(() => this.stateService.state().heading);
+  protected currentAddress = computed(() => this.stateService.state().address);
   protected currentLat = computed(() => this.stateService.state().location.lat);
   protected currentLng = computed(() => this.stateService.state().location.lng);
   protected canonicalNodeId = computed(() => this.stateService.state().location.canonicalNodeId);
   protected adjacentLinks = computed(() => this.stateService.state().adjacentNodes);
+
+  protected minimapLabel = computed(() => {
+    const heading = this.stateService.cardinalHeading().toLowerCase();
+    const address = this.currentAddress()?.trim();
+    if (address && address !== 'Unknown Address') {
+      return `Mini map, heading ${heading} on ${address}`;
+    }
+    return `Mini map, heading ${heading}`;
+  });
 
   protected Math = Math;
   protected readonly radiusMeters = 90;

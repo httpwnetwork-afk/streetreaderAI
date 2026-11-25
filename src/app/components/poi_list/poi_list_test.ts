@@ -16,14 +16,17 @@
 
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
+import { vi } from 'vitest';
 import { PoiListComponent } from './poi_list';
 import { StateService } from '../../services/state_service';
+import { SpeechOutputService } from '../../services/speech_output_service';
 import { safeStorage } from '../../services/safe_storage';
 
 describe('PoiListComponent', () => {
   let component: PoiListComponent;
   let fixture: ComponentFixture<PoiListComponent>;
   let stateService: StateService;
+  let speechOutputService: SpeechOutputService;
 
   beforeEach(async () => {
     safeStorage.clear();
@@ -34,6 +37,7 @@ describe('PoiListComponent', () => {
     .compileComponents();
 
     stateService = TestBed.inject(StateService);
+    speechOutputService = TestBed.inject(SpeechOutputService);
     fixture = TestBed.createComponent(PoiListComponent);
     component = fixture.componentInstance;
     fixture.detectChanges();
@@ -56,12 +60,51 @@ describe('PoiListComponent', () => {
     });
     fixture.detectChanges();
 
-    const itemsDefault = fixture.nativeElement.querySelectorAll('mat-list-item');
+    const itemsDefault = fixture.nativeElement.querySelectorAll('button[mat-list-item]');
     expect(itemsDefault.length).toBe(3);
 
     stateService.setMaxPoiItems(5);
     fixture.detectChanges();
-    const itemsFive = fixture.nativeElement.querySelectorAll('mat-list-item');
+    const itemsFive = fixture.nativeElement.querySelectorAll('button[mat-list-item]');
     expect(itemsFive.length).toBe(5);
+  });
+
+  it('announces place name, type, direction, and distance when a POI button is tapped', () => {
+    const speakSpy = vi.spyOn(speechOutputService, 'speak').mockImplementation(() => {});
+    stateService.updateLocation(47.614, -122.342, 'img-1', 'node-1', 'ok');
+    stateService.setMetadata({
+      nearbyPOIs: [
+        {
+          name: 'Caffe Vita',
+          vicinity: '2100 5th Ave',
+          location: { latitude: 47.6143, longitude: -122.342 },
+          types: ['point_of_interest', 'coffee_shop'],
+          relativePosition: { side: 'RIGHT', depth: 'FRONT' },
+        },
+      ],
+    });
+    fixture.detectChanges();
+
+    const btn = fixture.nativeElement.querySelector('button[mat-list-item]') as HTMLButtonElement;
+    expect(btn).toBeTruthy();
+    btn.click();
+
+    expect(speakSpy).toHaveBeenCalledTimes(1);
+    const spoken = speakSpy.mock.calls[0][0];
+    expect(spoken).toContain('Caffe Vita');
+    expect(spoken).toContain('coffee shop');
+    expect(spoken).toContain('front right');
+    expect(spoken).toMatch(/\d+\s+meters? away/);
+  });
+
+  it('shows loading message instead of empty state while street view is loading', () => {
+    stateService.setLoading(true);
+    fixture.detectChanges();
+    expect(fixture.nativeElement.textContent).toContain('Loading street view, please wait');
+    expect(fixture.nativeElement.textContent).not.toContain('No points of interest detected nearby');
+
+    stateService.setLoading(false);
+    fixture.detectChanges();
+    expect(fixture.nativeElement.textContent).toContain('No points of interest detected nearby');
   });
 });
