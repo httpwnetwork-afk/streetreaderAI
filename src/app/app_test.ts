@@ -47,7 +47,7 @@ describe('App', () => {
     fixture.detectChanges();
 
     const heading = fixture.nativeElement.querySelector('h1') as HTMLElement | null;
-    expect(heading?.textContent?.trim()).toBe('The Dark Shades Network Street Reader Demo');
+    expect(heading?.textContent?.trim()).toBe('DSN Street Reader Demo');
 
     const emoji = fixture.nativeElement.querySelector('.app-logo-emoji') as HTMLElement | null;
     expect(emoji?.getAttribute('aria-hidden')).toBe('true');
