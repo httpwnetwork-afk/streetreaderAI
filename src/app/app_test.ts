@@ -42,12 +42,12 @@ describe('App', () => {
     expect(fixture.componentInstance).toBeTruthy();
   });
 
-  it('exposes StreetReaderAI as an h1 heading and hides the road emoji from screen readers', () => {
+  it('exposes the app title as an h1 heading and hides the road emoji from screen readers', () => {
     const fixture = TestBed.createComponent(App);
     fixture.detectChanges();
 
     const heading = fixture.nativeElement.querySelector('h1') as HTMLElement | null;
-    expect(heading?.textContent?.trim()).toBe('StreetReaderAI');
+    expect(heading?.textContent?.trim()).toBe('The Dark Shades Network Street Reader Demo');
 
     const emoji = fixture.nativeElement.querySelector('.app-logo-emoji') as HTMLElement | null;
     expect(emoji?.getAttribute('aria-hidden')).toBe('true');
