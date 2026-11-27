@@ -72,6 +72,7 @@ export interface GetViewResponse {
   status: ImageStatus;
   message?: string | null;
   isPano?: boolean;
+  copyright?: string | null;
 }
 
 export interface RenderViewResponse {
@@ -203,6 +204,8 @@ export class ApiService {
     coordinates?: LatLng;
     heading?: number;
     pitch?: number;
+    stepBearing?: number;
+    excludeImageId?: string | null;
   }): Observable<GetViewResponse> {
     return defer(() => from(this.routeProvider.getPanoView(params))).pipe(
       tap((res) =>

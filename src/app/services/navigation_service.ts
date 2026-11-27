@@ -33,6 +33,7 @@ interface CachedNode {
   lat: number;
   lng: number;
   address?: string;
+  copyright?: string | null;
   pois?: NearbyPlace[];
 }
 
@@ -97,6 +98,42 @@ export class NavigationService {
     });
   }
 
+  /** Step coordinates in the movement direction and query the nearest single-image
+   * panorama there (used by retrieval_type=image providers such as Google Street View). */
+  stepInDirection(
+    moveBearing: number,
+    viewHeading: number,
+    directionLabel: 'forward' | 'backward'
+  ) {
+    const loc = this.stateService.currentLocation();
+    if (!loc.lat && !loc.lng) {
+      this.toastService.show(`Cannot move ${directionLabel}`);
+      return;
+    }
+    this.viewSub?.unsubscribe();
+    this.stateService.setLoading(true);
+    this.stateService.setHeading(viewHeading);
+    this.viewSub = this.apiService.getView({
+      coordinates: { latitude: loc.lat, longitude: loc.lng },
+      heading: viewHeading,
+      stepBearing: moveBearing,
+      excludeImageId: loc.imageId ?? null,
+    }).subscribe({
+      next: (view) => {
+        if (view.status === 'path_only' && !view.image) {
+          this.stateService.setLoading(false);
+          this.toastService.show(`Cannot move ${directionLabel}`);
+          return;
+        }
+        this.applyView(view, {
+          coordinates: view.coordinates ?? { latitude: loc.lat, longitude: loc.lng },
+          heading: viewHeading,
+        });
+      },
+      error: (err) => this.reportError(err, 'Location Error'),
+    });
+  }
+
   /** Rotation / look: same node, new heading. If we've been here, this is a
    * pure image re-crop via renderView — no road or graph fetches at all. */
   updateViewForHeading() {
@@ -151,6 +188,7 @@ export class NavigationService {
           this.stateService.setMetadata({
             adjacentNodes: cached.links,
             nearbyPOIs: pois,
+            imageryAttribution: cached.copyright ?? null,
             ...(cached.address ? { address: cached.address } : {}),
           });
         } else {
@@ -212,7 +250,11 @@ export class NavigationService {
       this.streetLabelFromLinks(nodeId, links) ||
       'Unknown Address';
     this.cacheFromView(view, coords ?? undefined, address);
-    this.stateService.setMetadata({ adjacentNodes: links, address });
+    this.stateService.setMetadata({
+      adjacentNodes: links,
+      address,
+      imageryAttribution: view.copyright ?? null,
+    });
     this.stateService.setLoading(false);
 
     if (coords) {
@@ -305,13 +347,14 @@ export class NavigationService {
   ) {
     const nodeId = view.canonicalNodeId;
     const at = view.coordinates ?? coords;
-    if (nodeId && at && view.links?.length) {
+    if (nodeId && at && (view.links?.length || view.imageId)) {
       this.nodeCache.set(nodeId, {
-        links: view.links,
+        links: view.links ?? [],
         imageId: view.imageId ?? null,
         lat: at.latitude,
         lng: at.longitude,
         address,
+        copyright: view.copyright ?? null,
       });
     }
   }

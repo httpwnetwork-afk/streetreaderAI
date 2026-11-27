@@ -344,4 +344,112 @@ capture_time_field = date
       vi.restoreAllMocks();
     }
   });
+
+  it('navigates Google Street View single-image mode by geocoding, point_url lookup, coordinate stepping, and zero-OSM minimap graph', async () => {
+    const fetchWaysSpy = vi.fn().mockResolvedValue([]);
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname.includes('/geocode/json')) {
+        if (url.searchParams.get('address')) {
+          return new Response(
+            JSON.stringify({
+              status: 'OK',
+              results: [
+                {
+                  formatted_address: 'Times Square, New York, NY 10036, USA',
+                  geometry: { location: { lat: 40.758, lng: -73.9855 } },
+                },
+              ],
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          );
+        }
+        return new Response(
+          JSON.stringify({
+            status: 'OK',
+            results: [
+              {
+                formatted_address: '1560 Broadway, New York, NY 10036, USA',
+                geometry: { location: { lat: 40.7582, lng: -73.9855 } },
+              },
+            ],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+      if (url.pathname.endsWith('/streetview/metadata')) {
+        const loc = url.searchParams.get('location') || '';
+        const lat = Number(loc.split(',')[0]);
+        const isStepped = lat > 40.7581;
+        return new Response(
+          JSON.stringify({
+            status: 'OK',
+            pano_id: isStepped ? 'gsv_nyc_2' : 'gsv_nyc_1',
+            location: { lat: isStepped ? 40.7582 : 40.758, lng: -73.9855 },
+            date: '2025-07',
+            copyright: '© Google',
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+      if (url.pathname.endsWith('/streetview')) {
+        return new Response(new Uint8Array([0xff, 0xd8, 0xff, 0xd9]), {
+          status: 200,
+          headers: { 'Content-Type': 'image/jpeg' },
+        });
+      }
+      return new Response('{}', { status: 404 });
+    });
+
+    try {
+      TestBed.configureTestingModule({
+        providers: [
+          {
+            provide: RoadDataService,
+            useValue: { fetchWaysForTile: fetchWaysSpy },
+          },
+        ],
+      });
+
+      const config = TestBed.inject(ConfigService);
+      config.applyConfText(`
+[system]
+imagery_provider = google
+location_provider = google
+
+[keys]
+google_maps_api_key = TestMapsKey
+      `);
+
+      const routeProvider = TestBed.inject(RouteProviderService);
+
+      const view1 = await routeProvider.getPanoView({
+        address: 'Times Square, New York, NY',
+        heading: 0,
+      });
+      expect(view1.status).toBe('ok');
+      expect(view1.imageId).toBe('gsv_nyc_1');
+      expect(view1.isPano).toBe(false);
+      expect(view1.copyright).toBe('© Google');
+      expect(view1.address).toContain('Times Square');
+      expect(fetchWaysSpy).not.toHaveBeenCalled();
+
+      const view2 = await routeProvider.getPanoView({
+        coordinates: view1.coordinates,
+        heading: 0,
+        stepBearing: 0,
+        excludeImageId: view1.imageId,
+      });
+      expect(view2.status).toBe('ok');
+      expect(view2.imageId).toBe('gsv_nyc_2');
+      expect(view2.address).toContain('Broadway');
+
+      const graph = await routeProvider.getLocalGraph(40.7582, -73.9855, 90);
+      expect(graph.nodes.length).toBe(2);
+      expect(fetchWaysSpy).not.toHaveBeenCalled();
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
 });

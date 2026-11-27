@@ -45,6 +45,9 @@ export interface ImageryPluginConfig {
   fovField: string[];
   dimensionsField: string[];
   thumbUrlField: string[];
+  statusField?: string;
+  statusOkValue?: string;
+  copyrightField: string[];
 }
 
 export interface LocationPluginConfig {
@@ -147,6 +150,21 @@ capture_time_field = captured_at
 sequence_field = sequence
 is_pano_field = is_pano
 thumb_url_field = thumb_original_url, thumb_2048_url
+
+[imagery.google]
+retrieval_type = image
+image_format = single
+requires_key = google_maps_api_key
+point_url = https://maps.googleapis.com/maps/api/streetview/metadata?location={lat},{lng}&radius={radius}&key={apiKey}
+metadata_url = https://maps.googleapis.com/maps/api/streetview/metadata?pano={imageId}&key={apiKey}
+image_url = https://maps.googleapis.com/maps/api/streetview?pano={imageId}&heading={heading}&pitch={pitch}&fov={fov}&size={width}x{height}&key={apiKey}
+id_field = pano_id
+lat_field = location.lat
+lng_field = location.lng
+capture_time_field = date
+status_field = status
+status_ok_value = OK
+copyright_field = copyright
 
 [location.osm]
 geocode_url = https://nominatim.openstreetmap.org/search?q={address}&format=json&limit=1&addressdetails=1
@@ -721,6 +739,9 @@ export class ConfigService {
           fovField: splitFieldList(sec['fov_field']),
           dimensionsField: splitFieldList(sec['dimensions_field']),
           thumbUrlField: splitFieldList(sec['thumb_url_field']),
+          statusField: sec['status_field'] || undefined,
+          statusOkValue: sec['status_ok_value'] || undefined,
+          copyrightField: splitFieldList(sec['copyright_field']),
         });
       } else if (secName.startsWith('location.')) {
         const name = secName.slice('location.'.length);

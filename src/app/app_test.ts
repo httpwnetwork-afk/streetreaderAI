@@ -21,6 +21,7 @@ import { App } from './app';
 import { StateService } from './services/state_service';
 import { CommandService } from './services/command_service';
 import { ConfigService } from './services/config_service';
+import { NavigationService } from './services/navigation_service';
 import { safeStorage } from './services/safe_storage';
 
 describe('App', () => {
@@ -35,6 +36,10 @@ describe('App', () => {
     const configService = TestBed.inject(ConfigService);
     vi.spyOn(configService, 'loadConfig').mockResolvedValue();
     vi.spyOn(configService, 'validateRequiredKeys').mockReturnValue(null);
+
+    const navigationService = TestBed.inject(NavigationService);
+    vi.spyOn(navigationService, 'loadCoordinates').mockImplementation(() => {});
+    vi.spyOn(navigationService, 'loadLocationWithHeading').mockImplementation(() => {});
   });
 
   it('should create the app', () => {
@@ -99,5 +104,25 @@ describe('App', () => {
 
     expect(img!.alt).toBe('Street view image at Pike Street, facing West (270°)');
     expect(minimap?.getAttribute('aria-label')).toBe('Mini map, heading west on Pike Street');
+  });
+
+  it('displays visible Google Street View attribution when imagery_provider is google', () => {
+    const fixture = TestBed.createComponent(App);
+    const configService = TestBed.inject(ConfigService);
+    const stateService = TestBed.inject(StateService);
+
+    configService.applyConfText(`
+[system]
+imagery_provider = google
+location_provider = google
+    `);
+    fixture.detectChanges();
+
+    const badge = fixture.nativeElement.querySelector('.imagery-attribution') as HTMLElement | null;
+    expect(badge?.textContent?.trim()).toBe('© Google · Google Street View');
+
+    stateService.setMetadata({ imageryAttribution: '© 2025 Google' });
+    fixture.detectChanges();
+    expect(badge?.textContent?.trim()).toBe('© 2025 Google · Google Street View');
   });
 });

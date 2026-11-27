@@ -24,7 +24,7 @@ import { CommandService, AppCommand } from './command_service';
 import { ToastService } from './toast_service';
 import { StreetViewLinksService } from './street_view_links_service';
 import { ApiService } from './api_service';
-import { describeError } from './config_service';
+import { ConfigService, describeError } from './config_service';
 import { Subscription } from 'rxjs';
 
 export type AppActivityState = 'IDLE' | 'TRAVELING' | 'TURNING' | 'MOVING' | 'LISTENING';
@@ -42,6 +42,7 @@ export class AppController {
   private toastService = inject(ToastService);
   private streetViewLinksService = inject(StreetViewLinksService);
   private apiService = inject(ApiService);
+  private configService = inject(ConfigService);
 
   private activityState = signal<AppActivityState>('IDLE');
   private waitingOnDescription = signal<boolean>(false);
@@ -63,6 +64,10 @@ export class AppController {
           }
        }
     }, { allowSignalWrites: true });
+
+    effect(() => {
+      this.setListening(this.speechInputService.listening());
+    });
   }
   
   setListening(isListening: boolean) {
@@ -131,6 +136,19 @@ export class AppController {
         return true;
 
       case 'MOVE_FORWARD': {
+        if (this.configService.getImageryPlugin()?.retrievalType === 'image') {
+          const loc = this.stateService.currentLocation();
+          if (!loc.lat && !loc.lng) {
+            this.toastService.show('Cannot move forward');
+            return true;
+          }
+          this.cancelOngoingTasks();
+          this.speechOutputService.stop();
+          this.activityState.set('MOVING');
+          this.toastService.show('Moving forward');
+          this.navigationService.stepInDirection(currentHeading, currentHeading, 'forward');
+          return true;
+        }
         const bestNode = this.streetViewLinksService.findForwardNode(currentHeading, this.stateService.state().adjacentNodes);
         if (bestNode) {
           this.cancelOngoingTasks();
@@ -146,6 +164,19 @@ export class AppController {
       
       case 'MOVE_BACKWARD': {
         const backHeading = (currentHeading + 180) % 360;
+        if (this.configService.getImageryPlugin()?.retrievalType === 'image') {
+          const loc = this.stateService.currentLocation();
+          if (!loc.lat && !loc.lng) {
+            this.toastService.show('Cannot move backward');
+            return true;
+          }
+          this.cancelOngoingTasks();
+          this.speechOutputService.stop();
+          this.activityState.set('MOVING');
+          this.toastService.show('Moving backward');
+          this.navigationService.stepInDirection(backHeading, currentHeading, 'backward');
+          return true;
+        }
         const bestNode = this.streetViewLinksService.findBestNode(backHeading, this.stateService.state().adjacentNodes);
         if (bestNode) {
           this.cancelOngoingTasks();
@@ -216,10 +247,8 @@ export class AppController {
       case 'TOGGLE_VOICE':
         if (this.speechInputService.listening()) {
           this.speechInputService.stopListening();
-          this.setListening(false);
         } else {
           this.speechInputService.startListening();
-          this.setListening(true);
         }
         return true;
 

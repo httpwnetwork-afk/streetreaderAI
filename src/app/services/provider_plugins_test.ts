@@ -220,6 +220,112 @@ capture_time_field = date
     expect((rendered?.image || '').length).toBeGreaterThan(0);
   });
 
+  it('ImageryProviderService executes [imagery.google] via /api/proxy with point_url, metadata_url, image_url, caching, and coordinate stepping', async () => {
+    const config = TestBed.inject(ConfigService);
+    config.applyConfText(`
+[system]
+imagery_provider = google
+location_provider = google
+
+[keys]
+google_maps_api_key = __SERVER_KEY_ENV:google_maps_api_key__
+    `);
+
+    const proxiedTargets: string[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      expect(String(input)).toBe('/api/proxy');
+      const reqPayload = JSON.parse(String(init?.body || '{}')) as { url: string };
+      proxiedTargets.push(reqPayload.url);
+      const targetUrl = new URL(reqPayload.url);
+
+      if (targetUrl.pathname.endsWith('/streetview/metadata')) {
+        const pano = targetUrl.searchParams.get('pano');
+        if (pano === 'nyc_pano_1') {
+          return new Response(
+            JSON.stringify({
+              status: 'OK',
+              pano_id: 'nyc_pano_1',
+              location: { lat: 40.758, lng: -73.9855 },
+              date: '2025-06',
+              copyright: '© 2025 Google',
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          );
+        }
+        const locParam = targetUrl.searchParams.get('location') || '';
+        const [latStr] = locParam.split(',');
+        const lat = Number(latStr);
+        if (lat > 40.7581) {
+          return new Response(
+            JSON.stringify({
+              status: 'OK',
+              pano_id: 'nyc_pano_2',
+              location: { lat: 40.7582, lng: -73.9855 },
+              date: '2025-06',
+              copyright: '© 2025 Google',
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          );
+        }
+        return new Response(
+          JSON.stringify({
+            status: 'OK',
+            pano_id: 'nyc_pano_1',
+            location: { lat: 40.758, lng: -73.9855 },
+            date: '2025-06',
+            copyright: '© 2025 Google',
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+
+      if (targetUrl.pathname.endsWith('/streetview')) {
+        expect(targetUrl.searchParams.get('size')).toBe('640x480');
+        expect(targetUrl.searchParams.get('fov')).toBe('90');
+        return new Response(new Uint8Array([0xff, 0xd8, 0xff, 0xd9]), {
+          status: 200,
+          headers: { 'Content-Type': 'image/jpeg' },
+        });
+      }
+
+      return new Response('{}', { status: 404 });
+    });
+
+    const imagery = TestBed.inject(ImageryProviderService);
+    expect(imagery.isSingleImageMode).toBe(true);
+
+    const nearest = await imagery.findNearestImage(40.758, -73.9855, 50);
+    expect(nearest?.imageId).toBe('nyc_pano_1');
+    expect(nearest?.copyright).toBe('© 2025 Google');
+
+    const byId = await imagery.getMetadata('nyc_pano_1');
+    expect(byId?.coordinates).toEqual({ latitude: 40.758, longitude: -73.9855 });
+
+    const img1 = await imagery.getImage('nyc_pano_1', 90, 0);
+    expect(img1?.actualHeading).toBe(90);
+    const imgCallsAfterFirst = proxiedTargets.filter((u) =>
+      u.includes('/maps/api/streetview?')
+    ).length;
+    expect(imgCallsAfterFirst).toBe(1);
+
+    // Same pano + heading served from memory cache with zero additional API calls
+    const img1Cached = await imagery.getImage('nyc_pano_1', 90, 0);
+    expect(img1Cached?.image).toBe(img1?.image);
+    expect(
+      proxiedTargets.filter((u) => u.includes('/maps/api/streetview?')).length
+    ).toBe(1);
+
+    // Stepping north queries point_url at stepped coordinates and finds nyc_pano_2
+    const nextStep = await imagery.findNextImageInDirection(
+      40.758,
+      -73.9855,
+      0,
+      'nyc_pano_1'
+    );
+    expect(nextStep?.meta.imageId).toBe('nyc_pano_2');
+    expect(nextStep?.distanceMeters).toBeGreaterThan(10);
+  });
+
   it('LocationProviderService executes declarative geocode, reverse_geocode, and autocomplete URLs', async () => {
     const config = TestBed.inject(ConfigService);
     config.applyConfText(`

@@ -45,6 +45,7 @@ export interface AppState {
   currentImage: string | null;
   adjacentNodes: Link[];
   nearbyPOIs: NearbyPlace[];
+  imageryAttribution: string | null;
   
   // App Session State
   chatHistory: ChatMessage[];
@@ -81,6 +82,7 @@ export class StateService {
     currentImage: null,
     adjacentNodes: [],
     nearbyPOIs: [],
+    imageryAttribution: null,
     chatHistory: [],
     isLoading: false,
     isLoadingPois: false,
@@ -189,7 +191,7 @@ export class StateService {
     this.appState.update(s => ({ ...s, heading: newHeading }));
   }
 
-  setMetadata(data: Partial<Pick<AppState, 'address' | 'description' | 'suggestedQuestions' | 'adjacentNodes' | 'nearbyPOIs'>>) {
+  setMetadata(data: Partial<Pick<AppState, 'address' | 'description' | 'suggestedQuestions' | 'adjacentNodes' | 'nearbyPOIs' | 'imageryAttribution'>>) {
     this.appState.update(s => ({ ...s, ...data }));
   }
 

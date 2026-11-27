@@ -38,6 +38,7 @@ export interface LocationMetadata {
   prevImageId?: string | null;
   nextImageId?: string | null;
   provider?: string;
+  copyright?: string | null;
 }
 
 export interface RenderedImageResult {
@@ -53,8 +54,15 @@ export interface SequenceBbox {
   maxLng: number;
 }
 
+export interface DirectionalImageStep {
+  meta: LocationMetadata;
+  distanceMeters: number;
+  bearing: number;
+}
+
 export interface ImageryProviderClient {
   readonly providerName: string;
+  readonly isSingleImageMode?: boolean;
   getMetadata(imageId: string): Promise<LocationMetadata | null>;
   getSequence(
     sequenceId: string,
@@ -71,6 +79,17 @@ export interface ImageryProviderClient {
     heading?: number,
     pitch?: number
   ): Promise<RenderedImageResult | null>;
+  findNearestImage?(
+    lat: number,
+    lng: number,
+    radiusM?: number
+  ): Promise<LocationMetadata | null>;
+  findNextImageInDirection?(
+    lat: number,
+    lng: number,
+    bearingDeg: number,
+    currentImageId?: string | null
+  ): Promise<DirectionalImageStep | null>;
 }
 
 function normalizeEpochMs(raw: unknown): string {
@@ -100,6 +119,26 @@ function compassBearingLocal(
   return (((Math.atan2(dx, dy) * 180.0) / Math.PI) + 360.0) % 360.0;
 }
 
+export function stepCoordinates(
+  lat: number,
+  lng: number,
+  bearingDeg: number,
+  distanceM: number
+): { lat: number; lng: number } {
+  const rad = (bearingDeg * Math.PI) / 180.0;
+  const nextLat = lat + (distanceM * Math.cos(rad)) / M_PER_DEG_LAT;
+  const nextLng =
+    lng +
+    (distanceM * Math.sin(rad)) /
+      (M_PER_DEG_LAT * Math.max(Math.cos((lat * Math.PI) / 180.0), 0.1));
+  return { lat: nextLat, lng: nextLng };
+}
+
+function angleDiffLocal(a: number, b: number): number {
+  const d = Math.abs(((a - b) % 360 + 360) % 360);
+  return d > 180 ? 360 - d : d;
+}
+
 @Injectable({
   providedIn: 'root',
 })
@@ -107,6 +146,7 @@ export class ImageryProviderService implements ImageryProviderClient {
   private readonly config = inject(ConfigService);
   private readonly cropService = inject(PanoramaCropService);
   private readonly memMeta = new Map<string, LocationMetadata>();
+  private readonly singleImageCache = new Map<string, string>();
   private readonly knownJunctions = new Map<string, LocationMetadata>();
   private readonly defaultFov = 120;
   private readonly panosOnly = true;
@@ -116,6 +156,10 @@ export class ImageryProviderService implements ImageryProviderClient {
 
   get providerName(): string {
     return this.config.imageryProvider();
+  }
+
+  get isSingleImageMode(): boolean {
+    return this.config.getImageryPlugin()?.retrievalType === 'image';
   }
 
   private getActivePlugin(): ImageryPluginConfig {
@@ -167,14 +211,23 @@ export class ImageryProviderService implements ImageryProviderClient {
       });
       queryAudit.recordExternal(`${plugin.name}_meta`, rawId);
       const resp = await this.config.proxiedFetch(url);
-      if (!resp.ok) return null;
+      if (resp.status === 404) return null;
+      if (!resp.ok) {
+        throw await this.buildImageryHttpError(plugin.name, resp);
+      }
       const payload = await resp.json();
+      if (this.checkMetadataStatus(plugin, payload) === 'empty') {
+        return null;
+      }
       const items = this.extractItems(payload, plugin.itemsPath);
       if (items.length === 0) return null;
       const parsed = this.parsePluginItem(plugin, items[0], true);
       if (!parsed) return null;
       return { ...parsed, imageId: String(imageId) };
-    } catch {
+    } catch (err) {
+      if (err instanceof Error && err.message.includes('imagery API error')) {
+        throw err;
+      }
       return null;
     }
   }
@@ -428,6 +481,119 @@ export class ImageryProviderService implements ImageryProviderClient {
   // Generic Point-Sampling Mode (`retrieval_type = image`)
   // =====================================================================
 
+  async findNearestImage(
+    lat: number,
+    lng: number,
+    radiusM: number = 50
+  ): Promise<LocationMetadata | null> {
+    const plugin = this.getActivePlugin();
+    return this.fetchPointMetadata(plugin, lat, lng, radiusM);
+  }
+
+  async findNextImageInDirection(
+    lat: number,
+    lng: number,
+    bearingDeg: number,
+    currentImageId?: string | null
+  ): Promise<DirectionalImageStep | null> {
+    const plugin = this.getActivePlugin();
+    const currentRawId = currentImageId ? normalizeRawImageId(currentImageId) : '';
+    const normBearing = ((bearingDeg % 360) + 360) % 360;
+    const probes: Array<{ distM: number; radiusM: number }> = [
+      { distM: 20, radiusM: 25 },
+      { distM: 42, radiusM: 35 },
+      { distM: 70, radiusM: 50 },
+    ];
+
+    for (const probe of probes) {
+      const target = stepCoordinates(lat, lng, normBearing, probe.distM);
+      const meta = await this.fetchPointMetadata(
+        plugin,
+        target.lat,
+        target.lng,
+        probe.radiusM
+      );
+      if (!meta) continue;
+      if (currentRawId && normalizeRawImageId(meta.imageId) === currentRawId) {
+        continue;
+      }
+      const movedDist = calculateDistance(
+        lat,
+        lng,
+        meta.coordinates.latitude,
+        meta.coordinates.longitude
+      );
+      if (movedDist < 3.0) continue;
+      const actualBearing = compassBearingLocal(
+        lat,
+        lng,
+        meta.coordinates.latitude,
+        meta.coordinates.longitude
+      );
+      if (angleDiffLocal(actualBearing, normBearing) <= 85.0) {
+        return {
+          meta,
+          distanceMeters: Math.round(movedDist),
+          bearing: Math.round(actualBearing * 10) / 10,
+        };
+      }
+    }
+    return null;
+  }
+
+  private async buildImageryHttpError(
+    providerName: string,
+    resp: Response
+  ): Promise<Error> {
+    let detail = resp.statusText || '';
+    const ct = (resp.headers.get('content-type') || '').toLowerCase();
+    if (ct.includes('json')) {
+      try {
+        const body = (await resp.json()) as {
+          error?: { status?: string; message?: string } | string;
+          error_message?: string;
+          message?: string;
+        };
+        if (typeof body.error === 'string' && body.error) {
+          detail = body.error;
+        } else if (body.error && typeof body.error === 'object') {
+          const parts = [body.error.status, body.error.message].filter(Boolean);
+          if (parts.length > 0) detail = parts.join(': ');
+        } else if (body.error_message) {
+          detail = body.error_message;
+        } else if (body.message) {
+          detail = body.message;
+        }
+      } catch {
+        // Keep statusText fallback
+      }
+    }
+    return new Error(
+      `${providerName} imagery API error (HTTP ${resp.status}${detail ? `: ${detail}` : ''})`
+    );
+  }
+
+  private checkMetadataStatus(
+    plugin: ImageryPluginConfig,
+    payload: unknown
+  ): 'ok' | 'empty' {
+    if (!plugin.statusField || !plugin.statusOkValue) return 'ok';
+    if (!payload || typeof payload !== 'object') return 'ok';
+    const status = String(
+      getFieldByPath(payload, [plugin.statusField]) || ''
+    ).trim();
+    if (!status || status === plugin.statusOkValue) return 'ok';
+    if (status === 'ZERO_RESULTS' || status === 'NOT_FOUND') {
+      return 'empty';
+    }
+    const errMsg = String(
+      (payload as Record<string, unknown>)['error_message'] || ''
+    ).trim();
+    throw new Error(
+      `${plugin.name} imagery API error (${status})${errMsg ? `: ${errMsg}` : ''}`
+    );
+  }
+
   private async fetchPointMetadata(
     plugin: ImageryPluginConfig,
     lat: number,
@@ -450,12 +616,21 @@ export class ImageryProviderService implements ImageryProviderClient {
           `${lat.toFixed(5)},${lng.toFixed(5)}`
         );
         const resp = await this.config.proxiedFetch(url);
-        if (!resp.ok) return null;
+        if (resp.status === 404) return null;
+        if (!resp.ok) {
+          throw await this.buildImageryHttpError(plugin.name, resp);
+        }
         const payload = await resp.json();
+        if (this.checkMetadataStatus(plugin, payload) === 'empty') {
+          return null;
+        }
         const items = this.extractItems(payload, plugin.itemsPath);
         if (items.length === 0) return null;
         return this.parsePluginItem(plugin, items[0], true);
-      } catch {
+      } catch (err) {
+        if (err instanceof Error && err.message.includes('imagery API error')) {
+          throw err;
+        }
         return null;
       }
     });
@@ -723,29 +898,53 @@ export class ImageryProviderService implements ImageryProviderClient {
     pitch: number
   ): Promise<RenderedImageResult | null> {
     if (!plugin.imageUrl) return null;
+    const normHeading =
+      Math.round((((heading % 360) + 360) % 360) * 10) / 10;
+    const normPitch = Math.round(pitch * 10) / 10;
+    const cacheKey = `${plugin.name}:${rawId}:${normHeading}:${normPitch}`;
+    const cached = this.singleImageCache.get(cacheKey);
+    if (cached) {
+      queryAudit.recordCacheHit(`${plugin.name}_image`);
+      return {
+        image: cached,
+        imageId: originalImageId,
+        actualHeading: normHeading,
+      };
+    }
+
     try {
       const apiKey = this.ensurePluginKey(plugin);
       const url = interpolateUrlTemplate(plugin.imageUrl, {
         imageId: rawId,
-        heading: ((heading % 360) + 360) % 360,
-        pitch,
+        heading: normHeading,
+        pitch: normPitch,
         fov: 90,
-        width: 960,
-        height: 720,
+        width: 640,
+        height: 480,
         apiKey,
       });
       queryAudit.recordExternal(`${plugin.name}_image`, rawId);
       const resp = await this.config.proxiedFetch(url);
-      if (!resp.ok) return null;
+      if (!resp.ok) {
+        throw await this.buildImageryHttpError(plugin.name, resp);
+      }
       const blob = await resp.blob();
       if (!blob || blob.size === 0) return null;
       const base64 = await blobToBase64(blob);
+      if (this.singleImageCache.size >= 48) {
+        const oldest = this.singleImageCache.keys().next().value;
+        if (oldest !== undefined) this.singleImageCache.delete(oldest);
+      }
+      this.singleImageCache.set(cacheKey, base64);
       return {
         image: base64,
         imageId: originalImageId,
-        actualHeading: heading,
+        actualHeading: normHeading,
       };
-    } catch {
+    } catch (err) {
+      if (err instanceof Error && err.message.includes('imagery API error')) {
+        throw err;
+      }
       return null;
     }
   }
@@ -851,6 +1050,15 @@ export class ImageryProviderService implements ImageryProviderClient {
       }
     }
 
+    const rawCopyright =
+      plugin.copyrightField.length > 0
+        ? getFieldByPath(item, plugin.copyrightField)
+        : undefined;
+    const copyright =
+      rawCopyright !== undefined && rawCopyright !== null
+        ? String(rawCopyright).trim() || null
+        : null;
+
     const meta: LocationMetadata = {
       imageId: String(rawId),
       coordinates: { latitude: lat, longitude: lng },
@@ -863,6 +1071,7 @@ export class ImageryProviderService implements ImageryProviderClient {
       prevImageId: prevId,
       nextImageId: nextId,
       provider: plugin.name,
+      ...(copyright ? { copyright } : {}),
     };
 
     const metaKey = `${plugin.name}:${meta.imageId}`;

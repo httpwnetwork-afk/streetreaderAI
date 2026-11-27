@@ -33,7 +33,6 @@ import { StreetViewLinksService } from './services/street_view_links_service';
 import { DescriptionService } from './services/description_service';
 import { SpeechOutputService } from './services/speech_output_service';
 import { ToastService } from './services/toast_service';
-import { SettingsDialog } from './components/settings_dialog/settings_dialog';
 import { HotkeysDialog } from './components/hotkeys_dialog/hotkeys_dialog';
 import { WelcomeDialogComponent } from './components/welcome_dialog/welcome_dialog';
 import { ErrorDialogComponent } from './components/error_dialog/error_dialog';
@@ -88,6 +87,18 @@ export class App implements OnInit, OnDestroy {
     const street = this.currentAddress() || 'unknown location';
     const heading = this.stateService.formattedHeading();
     return `Street view image at ${street}, facing ${heading}`;
+  });
+  protected imageryAttribution = computed(() => {
+    const copyright = this.stateService.state().imageryAttribution?.trim();
+    if (this.configService.imageryProvider() === 'google') {
+      if (copyright) {
+        return copyright.toLowerCase().includes('google')
+          ? `${copyright} · Google Street View`
+          : `Google Street View (${copyright})`;
+      }
+      return '© Google · Google Street View';
+    }
+    return copyright || '';
   });
   protected isLoading = computed(() => this.stateService.state().isLoading);
   protected adjacentNodes = computed(() => this.stateService.state().adjacentNodes);
@@ -284,7 +295,8 @@ export class App implements OnInit, OnDestroy {
     }
   }
 
-  protected openSettings() {
+  protected async openSettings() {
+    const { SettingsDialog } = await import('./components/settings_dialog/settings_dialog');
     this.dialog.open(SettingsDialog, { width: '600px', maxWidth: '95vw' });
   }
 

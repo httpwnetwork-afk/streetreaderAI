@@ -50,6 +50,12 @@
   <app-palette [components]="rightComponents()" side="right"></app-palette>
   <app-radar-view></app-radar-view>
 
+  @if (imageryAttribution()) {
+    <div class="imagery-attribution" aria-label="Imagery attribution">
+      {{ imageryAttribution() }}
+    </div>
+  }
+
   @if (demoModeService.enabled()) {
     <div class="demo-movement-keys mat-elevation-z3" role="region" aria-label="Movement controls">
       <div class="demo-keys-title">Movement Keys</div>

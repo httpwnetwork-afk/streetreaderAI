@@ -14,8 +14,10 @@
  limitations under the License.
  */
 
-import { Injectable, signal } from '@angular/core';
+import { Injectable, inject, signal } from '@angular/core';
 import { Subject } from 'rxjs';
+import { ToastService } from './toast_service';
+import { SpeechOutputService } from './speech_output_service';
 
 
 interface SpeechRecognitionResult {
@@ -70,6 +72,9 @@ interface WindowWithSpeech extends Window {
   providedIn: 'root'
 })
 export class SpeechInputService {
+  private toastService = inject(ToastService);
+  private speechOutputService = inject(SpeechOutputService);
+
   private recognition?: ISpeechRecognition;
   private isListening = signal(false);
   private transcriptionSubject = new Subject<string>();
@@ -88,7 +93,10 @@ export class SpeechInputService {
       (window as unknown as WindowWithSpeech).SpeechRecognition ||
       (window as unknown as WindowWithSpeech).webkitSpeechRecognition;
     if (!SpeechRecognition) {
-      console.error('Speech recognition not supported in this browser.');
+      const msg = 'Voice commands are not supported in this browser.';
+      console.warn(`[SpeechService] ${msg}`);
+      this.toastService.show(msg);
+      this.speechOutputService.speak(msg, true);
       return undefined;
     }
 
@@ -112,11 +120,34 @@ export class SpeechInputService {
     };
 
     this.recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
-      console.error(`[SpeechService] Recognition error: ${event.error}`);
       this.isListening.set(false);
+      console.warn(`[SpeechService] Recognition error: ${event.error}`);
+      const msg = this.describeRecognitionError(event.error);
+      if (msg) {
+        this.toastService.show(msg);
+        this.speechOutputService.speak(msg, true);
+      }
     };
 
     return this.recognition;
+  }
+
+  private describeRecognitionError(error: string): string | null {
+    switch (error) {
+      case 'not-allowed':
+      case 'service-not-allowed':
+        return 'Microphone access was denied. Please allow microphone permission in your browser settings to use voice commands.';
+      case 'audio-capture':
+        return 'No microphone was found. Please check your microphone and try again.';
+      case 'no-speech':
+        return 'No speech was detected. Please try again.';
+      case 'network':
+        return 'Speech recognition network error. Please try again.';
+      case 'aborted':
+        return null;
+      default:
+        return 'Voice recognition failed. Please try again.';
+    }
   }
 
   startListening() {
@@ -127,7 +158,7 @@ export class SpeechInputService {
     try {
       recognition.start();
     } catch (err) {
-      console.error('[SpeechService] Failed to start recognition:', err);
+      console.warn('[SpeechService] Failed to start recognition:', err);
       this.isListening.set(false);
     }
   }

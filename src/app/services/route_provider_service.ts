@@ -45,6 +45,7 @@ import {
   ImageryProviderClient,
   ImageryProviderService,
   LocationMetadata,
+  stepCoordinates,
 } from './imagery_provider_service';
 import {
   calculateDistance,
@@ -1629,9 +1630,14 @@ export class RouteProviderService {
     string,
     { centerLat: number; centerLng: number; snap: AreaSnapshot }
   >();
+  private readonly singleImageNodes = new Map<
+    string,
+    { nodeId: string; meta: LocationMetadata; address: string | null }
+  >();
 
   resetState(): void {
     this.tileSnapshots.clear();
+    this.singleImageNodes.clear();
     this.activeSequences.length = 0;
     this.visitedImageIds.clear();
     this.brokenImageIds.clear();
@@ -1813,6 +1819,197 @@ export class RouteProviderService {
     };
   }
 
+  private buildSingleImageStepLinks(
+    lat: number,
+    lng: number,
+    address?: string | null
+  ): Link[] {
+    const stepDistanceM = 20;
+    const bearings = [0, 90, 180, 270];
+    return bearings.map((bearing) => {
+      const target = stepCoordinates(lat, lng, bearing, stepDistanceM);
+      return {
+        canonicalNodeId: `step_${bearing}_${target.lat.toFixed(5)}_${target.lng.toFixed(5)}`,
+        imageId: null,
+        heading: bearing,
+        coordinates: { latitude: target.lat, longitude: target.lng },
+        distanceMeters: stepDistanceM,
+        streetName: address || undefined,
+        status: 'ok',
+        captureTime: null,
+        isPano: false,
+        arrivalHeading: bearing,
+      };
+    });
+  }
+
+  private async getSingleImageView(params: {
+    canonicalNodeId?: string;
+    imageId?: string;
+    address?: string;
+    coordinates?: LatLng;
+    heading?: number;
+    pitch?: number;
+    stepBearing?: number;
+    excludeImageId?: string | null;
+  }): Promise<GetViewResponse> {
+    const heading = (((params.heading ?? 0) % 360) + 360) % 360;
+    const pitch = params.pitch ?? 0;
+    let lat = params.coordinates?.latitude;
+    let lng = params.coordinates?.longitude;
+    let geocodedAddress: string | null = null;
+
+    if (!params.imageId && params.address) {
+      if (lat === undefined || lng === undefined) {
+        const geo = await this.location.geocode(params.address);
+        if (!geo) {
+          throw new Error(`Could not locate address: ${params.address}`);
+        }
+        lat = geo.lat;
+        lng = geo.lng;
+        geocodedAddress = geo.address || params.address;
+      } else {
+        geocodedAddress = params.address;
+      }
+    }
+
+    let meta: LocationMetadata | null = null;
+    if (params.stepBearing !== undefined && lat !== undefined && lng !== undefined) {
+      const stepped = await this.imagery.findNextImageInDirection(
+        lat,
+        lng,
+        params.stepBearing,
+        params.excludeImageId
+      );
+      if (!stepped) {
+        return {
+          image: null,
+          imageId: null,
+          canonicalNodeId: params.canonicalNodeId,
+          actualHeading: heading,
+          coordinates: { latitude: lat, longitude: lng },
+          captureTime: '',
+          address: null,
+          links: [],
+          status: 'path_only',
+          message: 'No imagery available further in that direction.',
+          isPano: false,
+        };
+      }
+      meta = stepped.meta;
+    } else if (params.imageId) {
+      meta = await this.imagery.getMetadata(params.imageId);
+      if (!meta) {
+        throw new Error(`Image ID ${params.imageId} not found.`);
+      }
+    } else {
+      if (lat === undefined || lng === undefined) {
+        throw new Error(
+          'generatePanoramaView needs coordinates (or an address) to locate the node.'
+        );
+      }
+      meta =
+        (await this.imagery.findNearestImage(lat, lng, 50)) ??
+        (await this.imagery.findNearestImage(lat, lng, 150));
+      if (!meta) {
+        throw new Error(
+          `No imagery available near ${lat.toFixed(5)}, ${lng.toFixed(5)}.`
+        );
+      }
+    }
+
+    const imageData = await this.imagery.getImage(meta.imageId, heading, pitch);
+    if (!imageData) {
+      this.brokenImageIds.add(meta.imageId);
+      throw new Error('Failed to retrieve image data.');
+    }
+
+    const resolvedAddress =
+      geocodedAddress ||
+      (await this.location.reverseGeocode(
+        meta.coordinates.latitude,
+        meta.coordinates.longitude
+      ));
+
+    const nodeId = `single_${meta.imageId}`;
+    this.visitedImageIds.add(meta.imageId);
+    if (this.singleImageNodes.size >= 128) {
+      const oldest = this.singleImageNodes.keys().next().value;
+      if (oldest !== undefined) this.singleImageNodes.delete(oldest);
+    }
+    this.singleImageNodes.set(nodeId, {
+      nodeId,
+      meta,
+      address: resolvedAddress,
+    });
+
+    const links = this.buildSingleImageStepLinks(
+      meta.coordinates.latitude,
+      meta.coordinates.longitude,
+      resolvedAddress
+    );
+
+    return {
+      image: imageData.image,
+      imageId: meta.imageId,
+      canonicalNodeId: nodeId,
+      actualHeading: imageData.actualHeading,
+      coordinates: {
+        latitude: meta.coordinates.latitude,
+        longitude: meta.coordinates.longitude,
+      },
+      captureTime: meta.captureTime || '',
+      address: resolvedAddress,
+      links,
+      status: 'ok',
+      isPano: false,
+      copyright: meta.copyright ?? null,
+    };
+  }
+
+  private getSingleImageLocalGraph(
+    lat: number,
+    lng: number,
+    radiusM: number
+  ): LocalGraphResponse {
+    const debugNodes: DebugNode[] = [];
+    let currentNodeId: string | null = null;
+    let nearestDist = Infinity;
+
+    for (const entry of this.singleImageNodes.values()) {
+      const d = calculateDistance(
+        lat,
+        lng,
+        entry.meta.coordinates.latitude,
+        entry.meta.coordinates.longitude
+      );
+      if (d <= radiusM) {
+        debugNodes.push({
+          canonicalNodeId: entry.nodeId,
+          coordinates: entry.meta.coordinates,
+          kind: 'waypoint',
+          status: 'ok',
+          imageId: entry.meta.imageId,
+          streetNames: entry.address ? [entry.address] : [],
+          sequenceId: null,
+        });
+      }
+      if (d < nearestDist && d <= 50.0) {
+        nearestDist = d;
+        currentNodeId = entry.nodeId;
+      }
+    }
+
+    return {
+      center: { latitude: lat, longitude: lng },
+      radiusMeters: radiusM,
+      currentNodeId,
+      nodes: debugNodes,
+      edges: [],
+      queryAudit: queryAudit.snapshot(),
+    };
+  }
+
   async getPanoView(params: {
     canonicalNodeId?: string;
     imageId?: string;
@@ -1820,7 +2017,13 @@ export class RouteProviderService {
     coordinates?: LatLng;
     heading?: number;
     pitch?: number;
+    stepBearing?: number;
+    excludeImageId?: string | null;
   }): Promise<GetViewResponse> {
+    if (Boolean(this.imagery.isSingleImageMode)) {
+      return this.getSingleImageView(params);
+    }
+
     let heading = params.heading ?? 0;
     const pitch = params.pitch ?? 0;
     const canonicalNodeId = params.canonicalNodeId;
@@ -2034,6 +2237,10 @@ export class RouteProviderService {
     lng: number,
     radiusM: number = 80.0
   ): Promise<LocalGraphResponse> {
+    if (Boolean(this.imagery.isSingleImageMode)) {
+      return this.getSingleImageLocalGraph(lat, lng, radiusM);
+    }
+
     const snap = await this.snapshotAt(lat, lng);
     await snap.solve(lat, lng, radiusM);
     this.cacheSolvedGraph(snap);
