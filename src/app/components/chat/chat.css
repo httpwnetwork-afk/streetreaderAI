@@ -89,6 +89,10 @@
   animation: pulse-text 1.5s infinite;
 }
 
+.listening-indicator.transcribing {
+  color: #1565c0;
+}
+
 .input-actions {
   display: flex;
   align-items: center;

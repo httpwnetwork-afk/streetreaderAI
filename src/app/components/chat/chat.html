@@ -35,10 +35,20 @@
   </div>
 
   <div class="input-area">
-    <div class="listening-indicator" *ngIf="speechInputService.listening()">
-      <mat-icon>mic</mat-icon>
-      <span>Listening...</span>
+    <div class="sr-only voice-status-live" role="status" aria-live="polite" aria-atomic="true">
+      {{ speechInputService.announcement() }}
     </div>
+    @if (speechInputService.listening()) {
+      <div class="listening-indicator" aria-hidden="true">
+        <mat-icon>mic</mat-icon>
+        <span>Listening... Tap mic to stop</span>
+      </div>
+    } @else if (speechInputService.transcribing()) {
+      <div class="listening-indicator transcribing" aria-hidden="true">
+        <mat-icon>hourglass_top</mat-icon>
+        <span>Transcribing&hellip;</span>
+      </div>
+    }
     <mat-form-field appearance="outline" class="full-width">
       <mat-label>Question</mat-label>
       <input matInput 
@@ -47,10 +57,15 @@
              (keydown.enter)="sendMessage()" 
              aria-label="Type a question about the view">
       <div matSuffix class="input-actions">
-        <button mat-icon-button (click)="toggleListening()" [color]="speechInputService.listening() ? 'warn' : null" 
-                [class.recording]="speechInputService.listening()" type="button"
-                [attr.aria-label]="speechInputService.listening() ? 'Stop voice command' : 'Start voice command'">
-          <mat-icon aria-hidden="true">{{ speechInputService.listening() ? 'mic' : 'mic_none' }}</mat-icon>
+        <button mat-icon-button
+                (click)="toggleListening()"
+                [disabled]="speechInputService.transcribing()"
+                [color]="speechInputService.listening() ? 'warn' : null"
+                [class.recording]="speechInputService.listening()"
+                type="button"
+                [attr.aria-pressed]="speechInputService.listening()"
+                [attr.aria-label]="micAriaLabel()">
+          <mat-icon aria-hidden="true">{{ micIcon() }}</mat-icon>
         </button>
         <button mat-icon-button (click)="sendMessage()" [disabled]="isAsking() || !chatControl.value" type="button"
                 aria-label="Send question">

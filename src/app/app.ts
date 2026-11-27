@@ -76,7 +76,7 @@ export class App implements OnInit, OnDestroy {
   private dialog = inject(MatDialog);
 
   private commandSubscription?: Subscription;
-  private startingAddress = '2110 5th Ave, Seattle, WA';
+  private startingAddress = 'Times Square, New York, NY 10036';
 
   protected leftComponents = computed(() => this.uiService.getComponentsBySide('left'));
   protected rightComponents = computed(() => this.uiService.getComponentsBySide('right'));
@@ -173,7 +173,7 @@ export class App implements OnInit, OnDestroy {
 
     this.apiService.getConfig().subscribe({
       next: (cfg) => {
-        this.startingAddress = cfg.startingAddress || '2110 5th Ave, Seattle, WA';
+        this.startingAddress = cfg.startingAddress || 'Times Square, New York, NY 10036';
         loadStartingLocation(this.startingAddress);
       },
       error: () => {

@@ -81,7 +81,7 @@ export interface GeminiTtsConfig {
   endpointUrl: string;
 }
 
-export const DEFAULT_STARTING_ADDRESS = '2110 5th Ave, Seattle, WA';
+export const DEFAULT_STARTING_ADDRESS = 'Times Square, New York, NY 10036';
 export const DEFAULT_PANORAMAX_BASE_URL = 'https://api.panoramax.xyz/api';
 export const DEFAULT_MAPILLARY_BASE_URL = 'https://graph.mapillary.com';
 export const DEFAULT_NOMINATIM_BASE_URL = 'https://nominatim.openstreetmap.org';
@@ -105,10 +105,10 @@ export function isServerKeyPlaceholder(value: string): boolean {
 
 export const DEFAULT_STREETREADER_CONF = `
 [system]
-imagery_provider = panoramax
-location_provider = osm
+imagery_provider = google
+location_provider = google
 ai_provider = gemini
-starting_address = 2110 5th Ave, Seattle, WA
+starting_address = Times Square, New York, NY 10036
 max_poi_items = 3
 
 [keys]

@@ -48,10 +48,10 @@ describe('DemoModeModule', () => {
 
     expect(demoService.enabled()).toBe(true);
 
-    // Press '3' to jump to 3rd preset location (Amsterdam — Oudezijds Voorburgwal)
+    // Press '3' to jump to 3rd preset location (Apollo Theatre, Harlem)
     window.dispatchEvent(new KeyboardEvent('keydown', { key: '3' }));
-    expect(demoService.activeLocation()?.id).toBe('amsterdam-oudezijds-voorburgwal');
-    expect(loadCoordsSpy).toHaveBeenCalledWith(52.37299, 4.89696, 38);
+    expect(demoService.activeLocation()?.id).toBe('apollo-theatre-harlem');
+    expect(loadCoordsSpy).toHaveBeenCalledWith(40.80972, -73.95010, 0);
 
     // When LLM suggestedQuestions are populated in StateService, activeQuestions uses up to 3
     stateService.setMetadata({

@@ -38,6 +38,11 @@ Provide a brief (2-3 sentence) description of the current image for a blind trav
 Also generate 3 short, specific follow-up questions (under 12 words each) that the traveler might ask to learn more about concrete visual details actually visible in this scene (for example, asking about a specific visible storefront, sign, building feature, sidewalk layout, crossing, or landmark in the image). Do not ask generic questions about things that are not in the image, and do not simply repeat facts you already stated in the description.
 `.trim();
 
+export const TRANSCRIBE_AUDIO_PROMPT =
+  'Transcribe the speech in this audio recording exactly as spoken. ' +
+  'Return only the transcript text with no extra words, quotes, commentary, or labels. ' +
+  'If no speech is audible, return an empty string.';
+
 export function buildQuestionPrompt(
   question: string,
   detectActions: boolean
@@ -139,6 +144,48 @@ export class AiProviderService {
     return plugin.wireFormat === 'openai'
       ? this.openaiAsk(plugin, cleanBase64, question, detectActions)
       : this.geminiAsk(plugin, cleanBase64, question, detectActions);
+  }
+
+  async transcribeAudio(
+    audioBase64: string,
+    mimeType: string
+  ): Promise<string> {
+    if (!audioBase64) {
+      throw new Error('Missing audio data.');
+    }
+    const cleanBase64 = stripDataUrlPrefix(audioBase64);
+    const cleanMimeType =
+      (mimeType || 'audio/webm').split(';')[0].trim().toLowerCase() ||
+      'audio/webm';
+    const plugin = this.config.getAiPlugin('gemini');
+    if (!plugin) {
+      throw new Error(
+        'AI provider "gemini" is not defined in streetreaderai.conf.'
+      );
+    }
+
+    const data = await this.fetchGemini(plugin, {
+      contents: [
+        {
+          parts: [
+            { text: TRANSCRIBE_AUDIO_PROMPT },
+            {
+              inlineData: {
+                mimeType: cleanMimeType,
+                data: cleanBase64,
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    const parts: Array<{ text?: string }> =
+      data?.candidates?.[0]?.content?.parts || [];
+    return parts
+      .map((p) => (typeof p?.text === 'string' ? p.text : ''))
+      .join('')
+      .trim();
   }
 
   // =====================================================================

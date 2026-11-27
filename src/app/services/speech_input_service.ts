@@ -14,191 +14,334 @@
  limitations under the License.
  */
 
-import { Injectable, inject, signal } from '@angular/core';
+import { Injectable, OnDestroy, inject, signal } from '@angular/core';
 import { Subject } from 'rxjs';
-import { ToastService } from './toast_service';
+import { AiProviderService } from './ai_provider_service';
 import { SpeechOutputService } from './speech_output_service';
 
+export const PREFERRED_AUDIO_MIME_TYPES: readonly string[] = [
+  'audio/webm;codecs=opus',
+  'audio/webm',
+  'audio/mp4',
+  'audio/mp4;codecs=mp4a.40.2',
+];
 
-interface SpeechRecognitionResult {
-  readonly [index: number]: SpeechRecognitionAlternative;
-  readonly length: number;
+export const VOICE_ANNOUNCEMENTS = {
+  LISTENING: 'Listening — tap the microphone again when you finish speaking',
+  TRANSCRIBING: 'Transcribing…',
+  MIC_DENIED: 'Microphone not allowed',
+  TRANSCRIPTION_FAILED: 'I could not hear that — please type your question',
+} as const;
+
+export const MAX_RECORDING_DURATION_MS = 60_000;
+
+function pickSupportedAudioMimeType(): string | undefined {
+  if (
+    typeof MediaRecorder === 'undefined' ||
+    typeof MediaRecorder.isTypeSupported !== 'function'
+  ) {
+    return undefined;
+  }
+  for (const candidate of PREFERRED_AUDIO_MIME_TYPES) {
+    try {
+      if (MediaRecorder.isTypeSupported(candidate)) {
+        return candidate;
+      }
+    } catch {
+      // Ignore probe errors for unsupported types
+    }
+  }
+  return undefined;
 }
 
-interface SpeechRecognitionAlternative {
-  readonly transcript: string;
-  readonly confidence: number;
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const result = typeof reader.result === 'string' ? reader.result : '';
+      const commaIdx = result.indexOf(',');
+      resolve(commaIdx >= 0 ? result.slice(commaIdx + 1) : result);
+    };
+    reader.onerror = () =>
+      reject(reader.error || new Error('Failed to encode audio recording.'));
+    reader.readAsDataURL(blob);
+  });
 }
 
-interface SpeechRecognitionResultList {
-  readonly [index: number]: SpeechRecognitionResult;
-  readonly length: number;
-}
-
-interface SpeechRecognitionEvent extends Event {
-  readonly resultIndex: number;
-  readonly results: SpeechRecognitionResultList;
-}
-
-interface SpeechRecognitionErrorEvent extends Event {
-  readonly error: string;
-  readonly message: string;
-}
-
-interface ISpeechRecognition extends EventTarget {
-  continuous: boolean;
-  interimResults: boolean;
-  lang: string;
-  onstart: (() => void) | null;
-  onresult: ((event: SpeechRecognitionEvent) => void) | null;
-  onend: (() => void) | null;
-  onerror: ((event: SpeechRecognitionErrorEvent) => void) | null;
-  start(): void;
-  stop(): void;
-}
-
-interface SpeechRecognitionConstructor {
-  new (): ISpeechRecognition;
-}
-
-interface WindowWithSpeech extends Window {
-  SpeechRecognition?: SpeechRecognitionConstructor;
-  webkitSpeechRecognition?: SpeechRecognitionConstructor;
-  AudioContext?: typeof AudioContext;
-  webkitAudioContext?: typeof AudioContext;
+function isPermissionDeniedError(err: unknown): boolean {
+  const name = (err as { name?: string })?.name || '';
+  const message = (err as { message?: string })?.message || '';
+  return (
+    name === 'NotAllowedError' ||
+    name === 'PermissionDeniedError' ||
+    name === 'SecurityError' ||
+    /permission|denied|not allowed/i.test(message)
+  );
 }
 
 @Injectable({
-  providedIn: 'root'
+  providedIn: 'root',
 })
-export class SpeechInputService {
-  private toastService = inject(ToastService);
-  private speechOutputService = inject(SpeechOutputService);
+export class SpeechInputService implements OnDestroy {
+  private readonly aiProvider = inject(AiProviderService);
+  private readonly speechOutputService = inject(SpeechOutputService);
 
-  private recognition?: ISpeechRecognition;
-  private isListening = signal(false);
-  private transcriptionSubject = new Subject<string>();
+  private readonly isListening = signal(false);
+  private readonly isTranscribing = signal(false);
+  private readonly statusAnnouncement = signal('');
+  private readonly transcriptionSubject = new Subject<string>();
+
+  private isStarting = false;
+  private cancelPendingStart = false;
+  private activeStream: MediaStream | null = null;
+  private mediaRecorder: MediaRecorder | null = null;
+  private audioChunks: Blob[] = [];
+  private maxDurationTimer: ReturnType<typeof setTimeout> | null = null;
+  private announcementTimer: ReturnType<typeof setTimeout> | null = null;
 
   readonly listening = this.isListening.asReadonly();
+  readonly transcribing = this.isTranscribing.asReadonly();
+  readonly announcement = this.statusAnnouncement.asReadonly();
   readonly transcription$ = this.transcriptionSubject.asObservable();
 
-  private ensureRecognition(): ISpeechRecognition | undefined {
-    if (this.recognition) {
-      return this.recognition;
-    }
-    if (typeof window === 'undefined') {
-      return undefined;
-    }
-    const SpeechRecognition =
-      (window as unknown as WindowWithSpeech).SpeechRecognition ||
-      (window as unknown as WindowWithSpeech).webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      const msg = 'Voice commands are not supported in this browser.';
-      console.warn(`[SpeechService] ${msg}`);
-      this.toastService.show(msg);
-      this.speechOutputService.speak(msg, true);
-      return undefined;
+  async startListening(): Promise<void> {
+    if (this.isListening() || this.isStarting || this.isTranscribing()) {
+      return;
     }
 
-    this.recognition = new SpeechRecognition();
-    this.recognition.continuous = false;
-    this.recognition.interimResults = false;
-    this.recognition.lang = 'en-US';
+    if (
+      typeof navigator === 'undefined' ||
+      !navigator.mediaDevices?.getUserMedia ||
+      typeof MediaRecorder === 'undefined'
+    ) {
+      this.announce(VOICE_ANNOUNCEMENTS.TRANSCRIPTION_FAILED, true);
+      return;
+    }
 
-    this.recognition.onstart = () => {
-      this.isListening.set(true);
-      void this.playBeep();
-    };
+    this.isStarting = true;
+    this.cancelPendingStart = false;
 
-    this.recognition.onresult = (event: SpeechRecognitionEvent) => {
-      const transcript = event.results[0][0].transcript;
-      this.transcriptionSubject.next(transcript);
-    };
-
-    this.recognition.onend = () => {
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (err: unknown) {
+      this.isStarting = false;
+      this.cancelPendingStart = false;
       this.isListening.set(false);
-    };
+      if (isPermissionDeniedError(err)) {
+        this.announce(VOICE_ANNOUNCEMENTS.MIC_DENIED, true);
+      } else {
+        console.warn('[SpeechInputService] Microphone acquisition failed:', err);
+        this.announce(VOICE_ANNOUNCEMENTS.TRANSCRIPTION_FAILED, true);
+      }
+      return;
+    }
 
-    this.recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
-      this.isListening.set(false);
-      console.warn(`[SpeechService] Recognition error: ${event.error}`);
-      const msg = this.describeRecognitionError(event.error);
-      if (msg) {
-        this.toastService.show(msg);
-        this.speechOutputService.speak(msg, true);
+    if (this.cancelPendingStart) {
+      this.cancelPendingStart = false;
+      this.isStarting = false;
+      this.stopStreamTracks(stream);
+      return;
+    }
+
+    this.activeStream = stream;
+    this.audioChunks = [];
+
+    const chosenMimeType = pickSupportedAudioMimeType();
+    let recorder: MediaRecorder;
+    try {
+      recorder = chosenMimeType
+        ? new MediaRecorder(stream, { mimeType: chosenMimeType })
+        : new MediaRecorder(stream);
+    } catch (err) {
+      console.warn('[SpeechInputService] Failed to create MediaRecorder:', err);
+      this.cleanupRecordingResources();
+      this.announce(VOICE_ANNOUNCEMENTS.TRANSCRIPTION_FAILED, true);
+      return;
+    }
+
+    this.mediaRecorder = recorder;
+    let handledError = false;
+
+    recorder.ondataavailable = (event: BlobEvent) => {
+      if (event.data && event.data.size > 0) {
+        this.audioChunks.push(event.data);
       }
     };
 
-    return this.recognition;
-  }
+    recorder.onerror = (event: Event) => {
+      console.warn('[SpeechInputService] MediaRecorder error:', event);
+      handledError = true;
+      this.cleanupRecordingResources();
+      this.announce(VOICE_ANNOUNCEMENTS.TRANSCRIPTION_FAILED, true);
+    };
 
-  private describeRecognitionError(error: string): string | null {
-    switch (error) {
-      case 'not-allowed':
-      case 'service-not-allowed':
-        return 'Microphone access was denied. Please allow microphone permission in your browser settings to use voice commands.';
-      case 'audio-capture':
-        return 'No microphone was found. Please check your microphone and try again.';
-      case 'no-speech':
-        return 'No speech was detected. Please try again.';
-      case 'network':
-        return 'Speech recognition network error. Please try again.';
-      case 'aborted':
-        return null;
-      default:
-        return 'Voice recognition failed. Please try again.';
-    }
-  }
-
-  startListening() {
-    if (this.isListening()) return;
-    const recognition = this.ensureRecognition();
-    if (!recognition) return;
+    recorder.onstop = () => {
+      const chunks = this.audioChunks;
+      const mimeType =
+        recorder.mimeType ||
+        chosenMimeType ||
+        chunks.find((c) => c.type)?.type ||
+        'audio/mp4';
+      this.cleanupRecordingResources();
+      if (handledError) {
+        return;
+      }
+      void this.transcribeRecordedAudio(chunks, mimeType);
+    };
 
     try {
-      recognition.start();
+      recorder.start();
     } catch (err) {
-      console.warn('[SpeechService] Failed to start recognition:', err);
-      this.isListening.set(false);
+      console.warn('[SpeechInputService] Failed to start MediaRecorder:', err);
+      this.cleanupRecordingResources();
+      this.announce(VOICE_ANNOUNCEMENTS.TRANSCRIPTION_FAILED, true);
+      return;
     }
+
+    this.isStarting = false;
+    this.isListening.set(true);
+    this.announce(VOICE_ANNOUNCEMENTS.LISTENING, false);
+
+    this.clearMaxDurationTimer();
+    this.maxDurationTimer = setTimeout(() => {
+      this.stopListening();
+    }, MAX_RECORDING_DURATION_MS);
   }
 
-  stopListening() {
-    if (this.recognition && this.isListening()) {
-      this.recognition.stop();
-    }
-  }
+  stopListening(): void {
+    this.clearMaxDurationTimer();
 
-  private playBeep(): Promise<void> {
-    return new Promise((resolve) => {
+    if (this.isStarting) {
+      this.cancelPendingStart = true;
+      return;
+    }
+
+    const recorder = this.mediaRecorder;
+    if (recorder && recorder.state !== 'inactive') {
       try {
-        const AudioContextClass = (window as unknown as WindowWithSpeech).AudioContext || 
-                                  (window as unknown as WindowWithSpeech).webkitAudioContext;
-        if (!AudioContextClass) {
-          throw new Error('AudioContext not supported');
-        }
-        const audioCtx = new AudioContextClass();
-        const oscillator = audioCtx.createOscillator();
-        const gainNode = audioCtx.createGain();
-
-        oscillator.connect(gainNode);
-        gainNode.connect(audioCtx.destination);
-
-        oscillator.type = 'sine';
-        oscillator.frequency.setValueAtTime(440, audioCtx.currentTime);
-        gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
-
-        oscillator.start();
-        oscillator.stop(audioCtx.currentTime + 0.1);
-
-        oscillator.onended = () => {
-          audioCtx.close();
-          resolve();
-        };
-      } catch (e) {
-        console.warn('Could not play beep sound for speech input.', e);
-        resolve(); // Resolve anyway so speech can continue
+        recorder.stop();
+        return;
+      } catch (err) {
+        console.warn('[SpeechInputService] Failed to stop MediaRecorder:', err);
       }
-    });
+    }
+
+    this.cleanupRecordingResources();
+  }
+
+  ngOnDestroy(): void {
+    if (this.announcementTimer !== null) {
+      clearTimeout(this.announcementTimer);
+      this.announcementTimer = null;
+    }
+    this.cancelPendingStart = true;
+    const recorder = this.mediaRecorder;
+    if (recorder) {
+      recorder.ondataavailable = null;
+      recorder.onerror = null;
+      recorder.onstop = null;
+      if (recorder.state !== 'inactive') {
+        try {
+          recorder.stop();
+        } catch {
+          // Ignore errors during teardown
+        }
+      }
+    }
+    this.cleanupRecordingResources();
+  }
+
+  private async transcribeRecordedAudio(
+    chunks: Blob[],
+    mimeType: string
+  ): Promise<void> {
+    const audioBlob = new Blob(chunks, { type: mimeType });
+    if (audioBlob.size === 0) {
+      this.announce(VOICE_ANNOUNCEMENTS.TRANSCRIPTION_FAILED, true);
+      return;
+    }
+
+    this.isTranscribing.set(true);
+    this.announce(VOICE_ANNOUNCEMENTS.TRANSCRIBING, true);
+
+    try {
+      const base64Audio = await blobToBase64(audioBlob);
+      if (!base64Audio) {
+        this.announce(VOICE_ANNOUNCEMENTS.TRANSCRIPTION_FAILED, true);
+        return;
+      }
+
+      const transcript = (
+        await this.aiProvider.transcribeAudio(base64Audio, mimeType)
+      ).trim();
+
+      if (!transcript) {
+        this.announce(VOICE_ANNOUNCEMENTS.TRANSCRIPTION_FAILED, true);
+        return;
+      }
+
+      this.isTranscribing.set(false);
+      this.announce(transcript, false);
+      this.transcriptionSubject.next(transcript);
+    } catch (err) {
+      console.warn('[SpeechInputService] Gemini transcription failed:', err);
+      this.announce(VOICE_ANNOUNCEMENTS.TRANSCRIPTION_FAILED, true);
+    } finally {
+      this.isTranscribing.set(false);
+    }
+  }
+
+  private announce(message: string, alsoSpeak: boolean): void {
+    if (this.announcementTimer !== null) {
+      clearTimeout(this.announcementTimer);
+      this.announcementTimer = null;
+    }
+
+    if (this.statusAnnouncement() === message) {
+      // Briefly clear so screen readers (e.g. VoiceOver) re-announce repeated messages.
+      this.statusAnnouncement.set('');
+      this.announcementTimer = setTimeout(() => {
+        this.announcementTimer = null;
+        this.statusAnnouncement.set(message);
+      }, 30);
+    } else {
+      this.statusAnnouncement.set(message);
+    }
+
+    if (alsoSpeak) {
+      this.speechOutputService.speak(message, true);
+    }
+  }
+
+  private clearMaxDurationTimer(): void {
+    if (this.maxDurationTimer !== null) {
+      clearTimeout(this.maxDurationTimer);
+      this.maxDurationTimer = null;
+    }
+  }
+
+  private stopStreamTracks(stream: MediaStream | null = this.activeStream): void {
+    if (stream) {
+      for (const track of stream.getTracks()) {
+        try {
+          track.stop();
+        } catch {
+          // Ignore errors stopping already-ended tracks
+        }
+      }
+    }
+    if (stream === this.activeStream) {
+      this.activeStream = null;
+    }
+  }
+
+  private cleanupRecordingResources(): void {
+    this.clearMaxDurationTimer();
+    this.stopStreamTracks();
+    this.mediaRecorder = null;
+    this.audioChunks = [];
+    this.isListening.set(false);
+    this.isStarting = false;
   }
 }

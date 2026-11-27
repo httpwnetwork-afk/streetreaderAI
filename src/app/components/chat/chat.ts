@@ -93,11 +93,23 @@ export class ChatComponent implements AfterViewInit, OnDestroy {
     this.demoService.askQuestion(q);
   }
 
+  protected readonly micAriaLabel = computed(() => {
+    if (this.speechInputService.listening()) return 'Stop recording';
+    if (this.speechInputService.transcribing()) return 'Transcribing audio';
+    return 'Start voice command';
+  });
+
+  protected readonly micIcon = computed(() => {
+    if (this.speechInputService.listening()) return 'mic';
+    if (this.speechInputService.transcribing()) return 'hourglass_top';
+    return 'mic_none';
+  });
+
   protected toggleListening() {
     if (this.speechInputService.listening()) {
       this.speechInputService.stopListening();
-    } else {
-      this.speechInputService.startListening();
+    } else if (!this.speechInputService.transcribing()) {
+      void this.speechInputService.startListening();
     }
   }
 
